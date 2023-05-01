@@ -1,6 +1,9 @@
+
+#!/usr/bin/env python
 import glob
 import os
 import sys
+
 try:
     sys.path.append(glob.glob('../carla/dist/carla-*%d.%d-%s.egg' % (
         sys.version_info.major,
@@ -8,15 +11,18 @@ try:
         'win-amd64' if os.name == 'nt' else 'linux-x86_64'))[0])
 except IndexError:
     pass
+
 import carla
 import numpy as np
 import tensorflow as tf
+import random
+import matplotlib.pyplot as plt
 
 # Define the environment and rewards
 env = carla.Client('localhost', 2000)
 world = env.get_world()
 vehicle_bp = world.get_blueprint_library().find('vehicle.tesla.model3')
-spawn_point = carla.Transform(carla.Location(x=20, y=0, z=2), carla.Rotation(yaw=180))
+spawn_point = carla.Transform(carla.Location(x=0, y=0, z=0), carla.Rotation(yaw=180))
 vehicle = world.spawn_actor(vehicle_bp, spawn_point)
 collision_sensor = world.spawn_actor(world.get_blueprint_library().find('sensor.other.collision'), carla.Transform(), attach_to=vehicle)
 reward = 0
@@ -53,20 +59,111 @@ sess = tf.compat.v1.Session()
 tf.compat.v1.keras.backend.set_session(sess)
 sess.run(tf.compat.v1.global_variables_initializer())
 
-# Train the agent
-for episode in range(10):
-    state = np.array([vehicle.get_location().x, vehicle.get_location().y, vehicle.get_velocity().x, vehicle.get_velocity().y])
-    done = False
-    while not done:
-        action = actor_model.predict(state.reshape(1, state_size)) + np.random.randn(1, action_size) / (episode + 1)
-        next_state, _, _, _ = vehicle.apply_control(carla.VehicleControl(throttle=action[0][0], steer=action[0][1]))
-        next_state = np.array([next_state.get_location().x, next_state.get_location().y, next_state.get_velocity().x, next_state.get_velocity().y])
-        reward = calculate_reward(next_state)
-        replay_buffer.add((state, action[0], reward, next_state, done))
-        state = next_state
-        if len(replay_buffer) > batch_size:
-            batch = replay_buffer.sample(batch_size)
-            train_critic(batch)
-            train_actor(batch)
-            update_target_models()
-        done = check_collision()
+# Define the reward function
+def calculate_reward(next_state):
+    reward = 0
+    if check_collision():
+        reward = -100
+    else:
+        reward = 1
+    return reward
+
+# Define the replay buffer
+class ReplayBuffer:
+    def __init__(self, buffer_size):
+        self.buffer_size = buffer_size
+        self.buffer = []
+        self.position = 0
+    def add(self, experience):
+        if len(self.buffer) < self.buffer_size:
+            self.buffer.append(None)
+        self.buffer[self.position] = experience
+        self.position = (self.position + 1) % self.buffer_size
+    def sample(self, batch_size):
+        return random.sample(self.buffer, batch_size)
+    def __len__(self):
+        return len(self.buffer)
+    
+# Define the training functions
+def train_critic(batch):
+    states = np.array([sample[0] for sample in batch])
+    actions = np.array([sample[1] for sample in batch])
+    rewards = np.array([sample[2] for sample in batch])
+    next_states = np.array([sample[3] for sample in batch])
+    dones = np.array([sample[4] for sample in batch])
+    target_actions = actor_target_model.predict(next_states)
+    target_q_values = critic_target_model.predict([next_states, target_actions])
+    target_q_values[dones] = 0
+    y = rewards + gamma * target_q_values
+    critic_model.fit([states, actions], y, batch_size=batch_size, verbose=0)
+
+def train_actor(batch):
+    states = np.array([sample[0] for sample in batch])
+    actions = np.array([sample[1] for sample in batch])
+    grads = critic_grads[0].eval(session=sess, feed_dict={state_input: states, action_input: actions})[0]
+    actor_model.fit(states, grads, batch_size=batch_size, verbose=0)
+
+def update_target_models():
+    actor_weights = actor_model.get_weights()
+    actor_target_weights = actor_target_model.get_weights()
+    for i in range(len(actor_weights)):
+        actor_target_weights[i] = tau * actor_weights[i] + (1 - tau) * actor_target_weights[i]
+    actor_target_model.set_weights(actor_target_weights)
+    critic_weights = critic_model.get_weights()
+    critic_target_weights = critic_target_model.get_weights()
+    for i in range(len(critic_weights)):
+        critic_target_weights[i] = tau * critic_weights[i] + (1 - tau) * critic_target_weights[i]
+    critic_target_model.set_weights(critic_target_weights)
+
+# Define the collision detection function
+def check_collision():
+    collision = False
+    if collision_sensor.get_collision_history():
+        collision = True
+    return collision
+
+# Define the main function
+def main():
+    buffer = ReplayBuffer(1000000)
+    rewards = []
+    for episode in range(100):
+        state = np.array([0, 0, 0, 0])
+        for step in range(1000):
+            action = actor_model.predict(state.reshape(1, state_size))[0]
+            next_state = np.array([0, 0, 0, 0])
+            reward = calculate_reward(next_state)
+	    rewards.append(reward)
+            done = False
+            buffer.add((state, action, reward, next_state, done))
+            state = next_state
+            if len(buffer) > batch_size:
+                batch = buffer.sample(batch_size)
+                train_critic(batch)
+                train_actor(batch)
+                update_target_models()
+            if done:
+                break
+	print('Episode: {} | Step: {} | Reward: {}'.format(episode, step, reward))
+
+    #save_model(episode)
+    tf.saved_model.save(actor_model, 'saved_model')
+    print('Model saved')
+
+    # Save the rewardw
+    plot_rewards = np.array(rewards)
+    np.save('rewards.npy', plot_rewards)
+    print('Rewards saved')
+    
+    # plot the rewards
+    plt.plot(plot_rewards)
+    plt.xlabel('Episode')
+    plt.ylabel('Reward')
+    plt.show()
+
+# Run the main function
+if __name__ == '__main__':
+    main()
+
+# Destroy the actors
+collision_sensor.destroy()
+vehicle.destroy()
