@@ -1,13 +1,28 @@
+
 #!/usr/bin/env python
+import glob
+import os
+import sys
+
+try:
+    sys.path.append(glob.glob('../carla/dist/carla-*%d.%d-%s.egg' % (
+        sys.version_info.major,
+        sys.version_info.minor,
+        'win-amd64' if os.name == 'nt' else 'linux-x86_64'))[0])
+except IndexError:
+    pass
+
 import carla
 import numpy as np
 import tensorflow as tf
+import random
+import matplotlib.pyplot as plt
 
 # Define the environment and rewards
 env = carla.Client('localhost', 2000)
 world = env.get_world()
 vehicle_bp = world.get_blueprint_library().find('vehicle.tesla.model3')
-spawn_point = carla.Transform(carla.Location(x=20, y=0, z=2), carla.Rotation(yaw=180))
+spawn_point = carla.Transform(carla.Location(x=0, y=0, z=0), carla.Rotation(yaw=180))
 vehicle = world.spawn_actor(vehicle_bp, spawn_point)
 collision_sensor = world.spawn_actor(world.get_blueprint_library().find('sensor.other.collision'), carla.Transform(), attach_to=vehicle)
 reward = 0
@@ -110,12 +125,14 @@ def check_collision():
 # Define the main function
 def main():
     buffer = ReplayBuffer(1000000)
+    rewards = []
     for episode in range(100):
         state = np.array([0, 0, 0, 0])
         for step in range(1000):
             action = actor_model.predict(state.reshape(1, state_size))[0]
             next_state = np.array([0, 0, 0, 0])
             reward = calculate_reward(next_state)
+	    rewards.append(reward)
             done = False
             buffer.add((state, action, reward, next_state, done))
             state = next_state
@@ -126,6 +143,22 @@ def main():
                 update_target_models()
             if done:
                 break
+	print('Episode: {} | Step: {} | Reward: {}'.format(episode, step, reward))
+
+    #save_model(episode)
+    tf.saved_model.save(actor_model, 'saved_model')
+    print('Model saved')
+
+    # Save the rewardw
+    plot_rewards = np.array(rewards)
+    np.save('rewards.npy', plot_rewards)
+    print('Rewards saved')
+    
+    # plot the rewards
+    plt.plot(plot_rewards)
+    plt.xlabel('Episode')
+    plt.ylabel('Reward')
+    plt.show()
 
 # Run the main function
 if __name__ == '__main__':
