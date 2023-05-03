@@ -34,6 +34,7 @@ action_size = 2
 gamma = 0.99
 batch_size = 64
 tau = 0.01
+
 actor_model = tf.keras.models.Sequential([
     tf.keras.layers.Dense(24, input_dim=state_size, activation='relu'),
     tf.keras.layers.Dense(24, activation='relu'),
@@ -132,7 +133,7 @@ def main():
             action = actor_model.predict(state.reshape(1, state_size))[0]
             next_state = np.array([0, 0, 0, 0])
             reward = calculate_reward(next_state)
-	    rewards.append(reward)
+            rewards.append(reward)
             done = False
             buffer.add((state, action, reward, next_state, done))
             state = next_state
@@ -143,7 +144,7 @@ def main():
                 update_target_models()
             if done:
                 break
-	print('Episode: {} | Step: {} | Reward: {}'.format(episode, step, reward))
+            print('Episode: {} | Step: {} | Reward: {}'.format(episode, step, reward))
 
     #save_model(episode)
     tf.saved_model.save(actor_model, 'saved_model')
