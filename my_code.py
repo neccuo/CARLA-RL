@@ -23,10 +23,13 @@ SHOW_PREVIEW = False
 IM_WIDTH = 640
 IM_HEIGHT = 800
 
-SECONDS_PER_EPISODE = 10
+RWD_SIZE = 10000
+
+SECONDS_PER_EPISODE = 13
 
 class CarEnv:
-    STEER_AMT = 1.0
+    STEER_AMT = 0.7
+    THROTTLE_AMT = 0.7
 
     actor_list = []
     collision_hist = []
@@ -41,6 +44,10 @@ class CarEnv:
         self.lr = 0.1
         self.gamma = 0.99
         self.epsilon = 0.1
+
+        self.total_reward = None
+        self.reward_array = np.ndarray(shape=(RWD_SIZE,), dtype=float)
+        self.i = 0
 
 
         self.client = carla.Client('localhost', 2000)
@@ -62,6 +69,10 @@ class CarEnv:
         self.collision_hist = []
         self.actor_list = []
 
+        if self.total_reward != None and self.i < RWD_SIZE:
+            self.reward_array[self.i] = np.round(self.total_reward, 2)
+            self.i += 1
+        self.total_reward = 0
 
         # FOR RANDOM SPAWN
         if RANDOM_SPAWN:
@@ -70,6 +81,8 @@ class CarEnv:
         else:
             # FIXED SPAWN
             self.transform = self.world.get_map().get_spawn_points()[0]
+
+        self.transform.rotation.yaw += 270
 
         self.vehicle = self.world.spawn_actor(self.model_3, self.transform)
         self.actor_list.append(self.vehicle)
@@ -118,32 +131,40 @@ class CarEnv:
 
     def step(self, action, yaw):
 
-        # 30 - yaw difference
-        reward = 30 - abs(yaw)
+        # 80 - yaw difference
+        reward = 100 - abs(yaw)
+        if reward > 0:
+            reward *= 5
 
         if action == 0:
-            yaw -= 3
-            self.vehicle.apply_control(carla.VehicleControl(throttle=1.0, steer=-1*self.STEER_AMT))
+            yaw -= 30
+            self.vehicle.apply_control(carla.VehicleControl(throttle=self.THROTTLE_AMT, steer=-1*self.STEER_AMT))
         if action == 1:
-            self.vehicle.apply_control(carla.VehicleControl(throttle=1.0, steer=0))
+            self.vehicle.apply_control(carla.VehicleControl(throttle=self.THROTTLE_AMT, steer=0))
         if action == 2:
-            yaw += 3
-            self.vehicle.apply_control(carla.VehicleControl(throttle=1.0, steer=1*self.STEER_AMT))
+            yaw += 30
+            self.vehicle.apply_control(carla.VehicleControl(throttle=self.THROTTLE_AMT, steer=1*self.STEER_AMT))
 
         v = self.vehicle.get_velocity()
         kmh = int(3.6 * math.sqrt(v.x**2 + v.y**2 + v.z**2))
 
         if len(self.collision_hist) != 0:
             done = True
-            reward -= 200
-        elif kmh < 50:
+            reward -= 1000
+        elif kmh < 20:
             done = False
-            reward += -5
+            reward += -2
         else:
             done = False
-            reward += 5
+            reward += 2
         if self.episode_start + SECONDS_PER_EPISODE < time.time():
             done = True
+
+        # reward for being alive
+        if not done:
+            reward += 10
+
+        self.total_reward += reward
 
         return yaw, reward, done, None
     
@@ -175,11 +196,17 @@ class CarEnv:
     def learn(self, state, action, reward, next_state):
         self.Q[state, action] = self.Q[state, action] + self.lr * (reward + self.gamma * np.max(self.Q[next_state, :]) - self.Q[state, action])
     
-    def save(self, path="qtable.npy"):
-        np.save(path, self.Q)
+    def save(self):
+        np.save("qtable.npy", self.Q)
+        np.save("reward_array2.npy", self.reward_array)
 
     def load(self, path="qtable.npy"):
         self.Q = np.load(path)
+
+    def test_rwd_arr(self, path="reward_array.npy"):
+        arr = np.load(path)
+        for i in range(10):
+            print(arr[i])
 
 def transform_to_relevant(transform):
     x = transform.location.x
@@ -191,7 +218,12 @@ try:
 
     # vehicle.set_autopilot(True)
     env = CarEnv()
+
+    env.test_rwd_arr()
+
     env.reset()
+
+    # env.load()
 
     vehicle = env.vehicle
     map = env.map
