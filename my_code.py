@@ -28,8 +28,8 @@ RWD_SIZE = 10000
 SECONDS_PER_EPISODE = 13
 
 class CarEnv:
-    STEER_AMT = 0.7
-    THROTTLE_AMT = 0.7
+    STEER_AMT = 0.5
+    THROTTLE_AMT = 0.4
 
     actor_list = []
     collision_hist = []
@@ -129,20 +129,26 @@ class CarEnv:
             # cv2.waitKey(1)
         self.front_camera = i3
 
-    def step(self, action, yaw):
+    def step(self, action, yaw, dist):
+        reward = 0
 
         # 80 - yaw difference
-        reward = 100 - abs(yaw)
+        if dist < 10:
+            reward += 100 - dist
+        else:
+            reward -= dist * 2
+        
+        reward += 80 - abs(yaw)
         if reward > 0:
             reward *= 5
 
         if action == 0:
-            yaw -= 30
+            yaw -= 20
             self.vehicle.apply_control(carla.VehicleControl(throttle=self.THROTTLE_AMT, steer=-1*self.STEER_AMT))
         if action == 1:
             self.vehicle.apply_control(carla.VehicleControl(throttle=self.THROTTLE_AMT, steer=0))
         if action == 2:
-            yaw += 30
+            yaw += 20
             self.vehicle.apply_control(carla.VehicleControl(throttle=self.THROTTLE_AMT, steer=1*self.STEER_AMT))
 
         v = self.vehicle.get_velocity()
@@ -150,7 +156,7 @@ class CarEnv:
 
         if len(self.collision_hist) != 0:
             done = True
-            reward -= 1000
+            reward -= 500
         elif kmh < 20:
             done = False
             reward += -2
@@ -244,13 +250,14 @@ try:
 
         # print(f"Car transform: {transform_to_relevant(vehicle_transform)}")
         # print(f"Waypoint transform: {transform_to_relevant(target_wp.transform)}")
+        dist = target_wp.transform.location.distance(vehicle_transform.location)
 
         yaw_diff = (waypoint_yaw - car_yaw)
 
         state = env.get_state(yaw_diff)
 
         action = env.get_action(state)
-        new_yaw, reward, done, _ = env.step(action, yaw_diff)
+        new_yaw, reward, done, _ = env.step(action, yaw_diff, dist)
 
         # if 3 > abs(yaw_diff):
         #     new_yaw, reward, done, _ = env.step(1)
